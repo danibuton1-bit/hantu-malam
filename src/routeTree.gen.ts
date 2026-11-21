@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as DaftarRouteImport } from './routes/daftar'
+import { Route as FpstestRouteImport } from './routes/fpstest'
 import { Route as HomeRouteImport } from './routes/home'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as RoomCodeRouteImport } from './routes/room.$code'
@@ -23,6 +24,11 @@ const IndexRoute = IndexRouteImport.update({
 const DaftarRoute = DaftarRouteImport.update({
   id: '/daftar',
   path: '/daftar',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const FpstestRoute = FpstestRouteImport.update({
+  id: '/fpstest',
+  path: '/fpstest',
   getParentRoute: () => rootRouteImport,
 } as any)
 const HomeRoute = HomeRouteImport.update({
@@ -44,6 +50,7 @@ const RoomCodeRoute = RoomCodeRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/daftar': typeof DaftarRoute
+  '/fpstest': typeof FpstestRoute
   '/home': typeof HomeRoute
   '/login': typeof LoginRoute
   '/room/$code': typeof RoomCodeRoute
@@ -51,6 +58,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/daftar': typeof DaftarRoute
+  '/fpstest': typeof FpstestRoute
   '/home': typeof HomeRoute
   '/login': typeof LoginRoute
   '/room/$code': typeof RoomCodeRoute
@@ -59,21 +67,30 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/daftar': typeof DaftarRoute
+  '/fpstest': typeof FpstestRoute
   '/home': typeof HomeRoute
   '/login': typeof LoginRoute
   '/room/$code': typeof RoomCodeRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/daftar' | '/home' | '/login' | '/room/$code'
+  fullPaths: '/' | '/daftar' | '/fpstest' | '/home' | '/login' | '/room/$code'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/daftar' | '/home' | '/login' | '/room/$code'
-  id: '__root__' | '/' | '/daftar' | '/home' | '/login' | '/room/$code'
+  to: '/' | '/daftar' | '/fpstest' | '/home' | '/login' | '/room/$code'
+  id:
+    | '__root__'
+    | '/'
+    | '/daftar'
+    | '/fpstest'
+    | '/home'
+    | '/login'
+    | '/room/$code'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   DaftarRoute: typeof DaftarRoute
+  FpstestRoute: typeof FpstestRoute
   HomeRoute: typeof HomeRoute
   LoginRoute: typeof LoginRoute
   RoomCodeRoute: typeof RoomCodeRoute
@@ -93,6 +110,13 @@ declare module '@tanstack/react-router' {
       path: '/daftar'
       fullPath: '/daftar'
       preLoaderRoute: typeof DaftarRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/fpstest': {
+      id: '/fpstest'
+      path: '/fpstest'
+      fullPath: '/fpstest'
+      preLoaderRoute: typeof FpstestRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/home': {
@@ -122,6 +146,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   DaftarRoute: DaftarRoute,
+  FpstestRoute: FpstestRoute,
   HomeRoute: HomeRoute,
   LoginRoute: LoginRoute,
   RoomCodeRoute: RoomCodeRoute,

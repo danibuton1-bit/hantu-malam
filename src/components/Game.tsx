@@ -3,14 +3,15 @@ import { Battery, Clock, KeyRound, Megaphone } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { batterySvg, characterSvg, CHARACTERS, exclaimSvg, ghostSvg, keySvg, kuntilanakSvg, loadImg, pocongSvg, type CharId } from "@/lib/art";
 import { audio } from "@/lib/audio";
-import { BATTERIES, CATCH_DIST, decideOutcome, EXIT, GAME_SECONDS, GHOST_SPAWN, HUNTER_SPAWNS, KEYS, move, npcsAt, ROOMS, roomAt, TOTAL_KEYS, WALLS, WORLD } from "@/lib/game";
+import { BATTERIES, CATCH_DIST, decideOutcome, EXIT, GAME_SECONDS, GHOST_SPAWN, HUNTER_SPAWNS, KEYS, move, npcsAt, roomAt, TOTAL_KEYS } from "@/lib/game";
 import { CharImg } from "./Art";
 import { Joystick } from "./Joystick";
+import { createScene } from "@/lib/scene3d";
 import { MuteButton } from "./MuteButton";
 import { Button } from "./ui/button";
 
 export type GamePlayer = { id: string; nama: string; username: string; karakter: CharId; role: "ghost" | "hunter" | null; status: string };
-type Live = { x: number; y: number; tx: number; ty: number; status: string; shoutUntil: number; moving: boolean; battery: number };
+type Live = { yaw: number; x: number; y: number; tx: number; ty: number; status: string; shoutUntil: number; moving: boolean; battery: number };
 
 const HUNTER_SPEED = 150, GHOST_SPEED = 168;
 
@@ -20,7 +21,7 @@ export function Game({ code, me, players, startedAt, isHost, onBackToLobby, onLe
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const joy = useRef({ x: 0, y: 0 });
   const keysDown = useRef<Record<string, boolean>>({});
-  const [hud, setHud] = useState({ time: GAME_SECONDS, keys: 0, battery: 100, statuses: {} as Record<string, string>, near: 0, room: "" });
+  const [hud, setHud] = useState({ time: GAME_SECONDS, keys: 0, battery: 100, statuses: {} as Record<string, string>, near: 0, room: "", cd: 0 });
   const [toast, setToast] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<"hunters" | "ghost" | null>(null);
   const [isTouch, setIsTouch] = useState(false);
@@ -37,16 +38,27 @@ export function Game({ code, me, players, startedAt, isHost, onBackToLobby, onLe
     const live: Record<string, Live> = {};
     players.forEach((p) => {
       const s = p.role === "ghost" ? GHOST_SPAWN : HUNTER_SPAWNS[hunters.indexOf(p) % 3]!;
-      live[p.id] = { x: s.x, y: s.y, tx: s.x, ty: s.y, status: "alive", shoutUntil: 0, moving: false, battery: 100 };
+      live[p.id] = { yaw: p.role === "ghost" ? 0 : Math.PI, x: s.x, y: s.y, tx: s.x, ty: s.y, status: "alive", shoutUntil: 0, moving: false, battery: 100 };
     });
     let keyMask = 0, batMask = 0, ended = false, lastSend = 0, lastStep = 0, stunUntil = 0, npcCd = 0;
     const meL = live[me]!;
-    const imgs = {
-      chars: Object.fromEntries((Object.keys(CHARACTERS) as CharId[]).map((c) => [c, loadImg(characterSvg(c))])) as Record<CharId, HTMLImageElement>,
-      ghost: loadImg(ghostSvg()), kunti: loadImg(kuntilanakSvg()), pocong: loadImg(pocongSvg()),
-      key: loadImg(keySvg()), bat: loadImg(batterySvg()), ex: loadImg(exclaimSvg()),
-    };
-    const dark = document.createElement("canvas");
+    const url = (svg: string) => loadImg(svg).src;
+    const imgUrls: Record<string, string> = { ghost: url(ghostSvg()), kunti: url(kuntilanakSvg()), pocong: url(pocongSvg()), key: url(keySvg()), bat: url(batterySvg()), ex: url(exclaimSvg()) };
+    (Object.keys(CHARACTERS) as CharId[]).forEach((c) => { imgUrls[c] = url(characterSvg(c)); });
+    const sc = createScene(canvasRef.current!, { me: amGhost ? "ghost" : meP.karakter, amGhost, imgs: imgUrls });
+    players.forEach((p) => { if (p.id !== me) sc.ensurePlayer(p.id, p.role === "ghost" ? "ghost" : p.karakter, p.role !== "ghost"); });
+    sc.resize(); const onResize = () => sc.resize(); window.addEventListener("resize", onResize);
+    let pitch = 0;
+    const cv = canvasRef.current!;
+    const look = (dx: number, dy: number) => { meL.yaw -= dx * 0.0042; pitch = Math.max(-1.1, Math.min(1.1, pitch - dy * 0.0042)); };
+    const onMouse = (e: MouseEvent) => { if (document.pointerLockElement === cv) look(e.movementX * 0.6, e.movementY * 0.6); };
+    const onClick = () => { if (!window.matchMedia("(pointer: coarse)").matches) void cv.requestPointerLock?.(); };
+    let touchId: number | null = null, tx0 = 0, ty0 = 0;
+    const onPD = (e: PointerEvent) => { if (e.pointerType === "mouse") return; touchId = e.pointerId; tx0 = e.clientX; ty0 = e.clientY; };
+    const onPM = (e: PointerEvent) => { if (e.pointerId !== touchId) return; look((e.clientX - tx0) * 1.4, (e.clientY - ty0) * 1.4); tx0 = e.clientX; ty0 = e.clientY; };
+    const onPU = (e: PointerEvent) => { if (e.pointerId === touchId) touchId = null; };
+    document.addEventListener("mousemove", onMouse); cv.addEventListener("click", onClick);
+    cv.addEventListener("pointerdown", onPD); window.addEventListener("pointermove", onPM); window.addEventListener("pointerup", onPU);
     let toastTimer = 0;
     const notify = (m: string) => { setToast(m); clearTimeout(toastTimer); toastTimer = window.setTimeout(() => setToast(null), 2600); };
 
@@ -66,9 +78,9 @@ export function Game({ code, me, players, startedAt, isHost, onBackToLobby, onLe
       if (keyMask === 31) { audio.creak(); setTimeout(() => notify("Semua kunci terkumpul! Kabur lewat gerbang Kuburan Belakang!"), 1200); }
     };
     ch.on("broadcast", { event: "pos" }, ({ payload }) => {
-      const p = payload as { id: string; x: number; y: number; m: boolean; st: string; k: number; b: number };
+      const p = payload as { id: string; a?: number; x: number; y: number; m: boolean; st: string; k: number; b: number };
       const l = live[p.id]; if (!l) return;
-      l.tx = p.x; l.ty = p.y; l.moving = p.m;
+      l.tx = p.x; l.ty = p.y; l.moving = p.m; if (p.a !== undefined) l.yaw = p.a;
       if (p.st !== "alive") setStatus(p.id, p.st);
       gainKeys(p.k, false); batMask |= p.b;
     });
@@ -103,7 +115,8 @@ export function Game({ code, me, players, startedAt, isHost, onBackToLobby, onLe
       meL.moving = canMove && mag > 0.1;
       if (meL.moving) {
         const sp = (amGhost ? GHOST_SPEED : HUNTER_SPEED) * dt;
-        const p = move(meL.x, meL.y, ix * sp, iy * sp);
+        const fw = -iy, sy = Math.sin(meL.yaw), cy = Math.cos(meL.yaw);
+        const p = move(meL.x, meL.y, (fw * -sy + ix * cy) * sp, (fw * -cy - ix * sy) * sp);
         meL.x = p.x; meL.y = p.y;
         if (now - lastStep > (amGhost ? 520 : 330)) { lastStep = now; if (!amGhost) audio.step(); }
       }
@@ -125,7 +138,7 @@ export function Game({ code, me, players, startedAt, isHost, onBackToLobby, onLe
       if (amGhost && !countdown && !ended) {
         for (const [id, l] of Object.entries(live)) if (id !== me && l.status === "alive" && Math.hypot(l.x - meL.x, l.y - meL.y) < CATCH_DIST) { setStatus(id, "caught"); send("caught", { id }); }
       }
-      if (now - lastSend > 100) { lastSend = now; send("pos", { id: me, x: Math.round(meL.x), y: Math.round(meL.y), m: meL.moving, st: meL.status, k: keyMask, b: batMask }); }
+      if (now - lastSend > 100) { lastSend = now; send("pos", { id: me, x: Math.round(meL.x), y: Math.round(meL.y), a: Math.round(meL.yaw * 100) / 100, m: meL.moving, st: meL.status, k: keyMask, b: batMask }); }
 
       // proximity fear
       const ghostId = players.find((p) => p.role === "ghost")?.id;
@@ -148,107 +161,21 @@ export function Game({ code, me, players, startedAt, isHost, onBackToLobby, onLe
       // camera follows me, or an alive hunter when spectating
       let cam = meL;
       if (meL.status !== "alive") { const alive = Object.entries(live).find(([id, l]) => l.status === "alive" && players.find((p) => p.id === id)?.role === "hunter"); if (alive) cam = alive[1]; }
-      draw(now, t, cam, npcs, near, timeLeft, countdown);
+      const fp = cam === meL;
+      sc.frame({ dt, t, cam, yaw: fp ? meL.yaw : cam.yaw, pitch: fp ? pitch : 0, moving: meL.moving, battery: meL.battery, near, keyMask, batMask, npcs, firstPerson: fp && meL.status === "alive",
+        others: players.filter((p) => p.id !== me).map((p) => { const l = live[p.id]!; return { id: p.id, x: l.x, y: l.y, yaw: l.yaw, ghost: p.role === "ghost", shouting: now < l.shoutUntil, visible: l.status === "alive" && l !== cam }; }) });
       if (now - hudT > 200) {
         hudT = now;
-        setHud({ time: Math.ceil(timeLeft), keys: [0, 1, 2, 3, 4].filter((i) => keyMask & (1 << i)).length, battery: meL.battery, near, room: roomAt(meL.x, meL.y), statuses: Object.fromEntries(Object.entries(live).map(([id, l]) => [id, l.status])) });
+        setHud({ time: Math.ceil(timeLeft), keys: [0, 1, 2, 3, 4].filter((i) => keyMask & (1 << i)).length, battery: meL.battery, near, room: roomAt(meL.x, meL.y), cd: countdown ? Math.ceil((startedAt - Date.now()) / 1000) : 0, statuses: Object.fromEntries(Object.entries(live).map(([id, l]) => [id, l.status])) });
       }
     };
 
-    const draw = (now: number, t: number, cam: Live, npcs: ReturnType<typeof npcsAt>, near: number, timeLeft: number, countdown: boolean) => {
-      const c = canvasRef.current; if (!c) return;
-      const dpr = Math.min(2, window.devicePixelRatio || 1);
-      const W = c.clientWidth, H = c.clientHeight;
-      if (c.width !== W * dpr || c.height !== H * dpr) { c.width = W * dpr; c.height = H * dpr; dark.width = c.width; dark.height = c.height; }
-      const g = c.getContext("2d")!;
-      const zoom = Math.max(0.6, Math.min(1.3, Math.min(W, H) / 520));
-      const S = zoom * dpr;
-      const ox = c.width / 2 - cam.x * S, oy = c.height / 2 - cam.y * S;
-      const shake = near > 0.55 ? (Math.random() - 0.5) * near * 10 * dpr : 0;
-      g.setTransform(1, 0, 0, 1, 0, 0); g.fillStyle = "#020102"; g.fillRect(0, 0, c.width, c.height);
-      g.setTransform(S, 0, 0, S, ox + shake, oy);
-      for (const r of ROOMS) {
-        g.fillStyle = r.floor; g.fillRect(r.x, r.y, r.w, r.h);
-        g.strokeStyle = "rgba(255,255,255,0.03)"; g.lineWidth = 2;
-        for (let yy = r.y; yy < r.y + r.h; yy += 40) { g.beginPath(); g.moveTo(r.x, yy); g.lineTo(r.x + r.w, yy); g.stroke(); }
-        g.fillStyle = "rgba(200,170,220,0.18)"; g.font = "28px Creepster, fantasy"; g.fillText(r.name.toUpperCase(), r.x + 30, r.y + 50);
-      }
-      // graves
-      g.fillStyle = "#3a3d38";
-      for (const [gx, gy] of [[1060, 600], [1260, 640], [1380, 880], [1080, 900]] as const) { g.beginPath(); g.roundRect(gx, gy, 34, 44, [16, 16, 2, 2]); g.fill(); }
-      g.fillStyle = "#3b2416"; WALLS.forEach((w) => g.fillRect(w.x, w.y, w.w, w.h));
-      g.strokeStyle = "#1a0e08"; g.lineWidth = 2; WALLS.forEach((w) => g.strokeRect(w.x, w.y, w.w, w.h));
-      // exit
-      const open = keyMask === 31;
-      g.strokeStyle = open ? "#59e36b" : "#8b0d17"; g.lineWidth = 6; g.beginPath(); g.arc(EXIT.x, EXIT.y, EXIT.r, 0, Math.PI * 2); g.stroke();
-      g.fillStyle = open ? "rgba(89,227,107,.25)" : "rgba(139,13,23,.25)"; g.fill();
-      g.fillStyle = "#ddd"; g.font = "16px 'Special Elite'"; g.textAlign = "center"; g.fillText(open ? "GERBANG TERBUKA" : "GERBANG TERKUNCI", EXIT.x, EXIT.y + EXIT.r + 20); g.textAlign = "left";
-      KEYS.forEach((k) => { if (!(keyMask & (1 << k.id))) { const b = Math.sin(t * 3 + k.id) * 4; g.drawImage(imgs.key, k.x - 22, k.y - 11 + b, 44, 22); } });
-      BATTERIES.forEach((b) => { if (!(batMask & (1 << b.id))) g.drawImage(imgs.bat, b.x - 10, b.y - 16, 20, 32); });
-      for (const n of npcs) g.drawImage(n.kind === "pocong" ? imgs.pocong : imgs.kunti, n.x - 28, n.y - 60, 56, 90);
-      // players
-      for (const p of players) {
-        const l = live[p.id]!;
-        if (l.status === "escaped") continue;
-        if (p.role === "ghost") {
-          g.globalAlpha = 0.85 + Math.sin(t * 4) * 0.1;
-          g.drawImage(imgs.ghost, l.x - 42, l.y - 70 + Math.sin(t * 2.5) * 6, 84, 105);
-          g.globalAlpha = 1;
-        } else {
-          g.globalAlpha = l.status === "caught" ? 0.35 : 1;
-          const bob = l.moving ? Math.abs(Math.sin(t * 12)) * 3 : 0;
-          g.drawImage(imgs.chars[p.karakter], l.x - 24, l.y - 56 - bob, 48, 67);
-          g.globalAlpha = 1;
-        }
-      }
-      // darkness
-      const d = dark.getContext("2d")!;
-      d.setTransform(1, 0, 0, 1, 0, 0); d.globalCompositeOperation = "source-over";
-      d.fillStyle = amGhost ? "rgba(8,0,14,0.9)" : "rgba(0,0,0,0.97)"; d.fillRect(0, 0, dark.width, dark.height);
-      d.globalCompositeOperation = "destination-out";
-      d.setTransform(S, 0, 0, S, ox + shake, oy);
-      const hole = (x: number, y: number, r: number, a = 1) => {
-        const gr = d.createRadialGradient(x, y, r * 0.2, x, y, r);
-        gr.addColorStop(0, `rgba(0,0,0,${a})`); gr.addColorStop(0.7, `rgba(0,0,0,${a * 0.75})`); gr.addColorStop(1, "rgba(0,0,0,0)");
-        d.fillStyle = gr; d.beginPath(); d.arc(x, y, r, 0, Math.PI * 2); d.fill();
-      };
-      if (amGhost) {
-        hole(meL.x, meL.y - 20, 260, 0.9);
-        for (const p of players) { const l = live[p.id]!; if (p.role === "hunter" && l.status === "alive") hole(l.x, l.y - 20, 60 + l.battery * 0.8, 0.5); }
-      } else {
-        for (const p of players) {
-          const l = live[p.id]!;
-          if (p.role !== "hunter" || l.status !== "alive") continue;
-          const bat = p.id === me ? l.battery : 70;
-          const flick = bat < 20 ? (Math.random() < 0.15 ? 0.3 : 1) : Math.random() < 0.01 ? 0.6 : 1;
-          hole(l.x, l.y - 20, (70 + bat * 1.3) * flick, p.id === me ? 1 : 0.7);
-        }
-        if (meL.status !== "alive") hole(cam.x, cam.y - 20, 180, 0.8);
-      }
-      g.setTransform(1, 0, 0, 1, 0, 0); g.drawImage(dark, 0, 0);
-      // overlays above darkness: shouts and names of teammates
-      g.setTransform(S, 0, 0, S, ox + shake, oy);
-      g.font = "13px 'Special Elite'"; g.textAlign = "center";
-      for (const p of players) {
-        const l = live[p.id]!;
-        if (l.status === "escaped") continue;
-        if (now < l.shoutUntil) { const s = 1 + Math.sin(now / 80) * 0.1; g.drawImage(imgs.ex, l.x - 14 * s, l.y - 110 * s, 28 * s, 42 * s); g.fillStyle = "#ff4d4d"; g.fillText("TOLONG!", l.x, l.y - 116); }
-        if (p.role === "hunter" && (!amGhost || p.id === me)) { g.fillStyle = "rgba(240,230,250,.8)"; g.fillText(p.nama, l.x, l.y + 26); }
-      }
-      g.textAlign = "left";
-      // noise / glitch
-      g.setTransform(1, 0, 0, 1, 0, 0);
-      if (near > 0.2) {
-        g.fillStyle = `rgba(255,255,255,${near * 0.08})`;
-        for (let i = 0; i < 160 * near; i++) g.fillRect(Math.random() * c.width, Math.random() * c.height, 2 * dpr, 2 * dpr);
-        if (Math.random() < near * 0.35) { const y = Math.random() * c.height; const h = 10 + Math.random() * 40; g.drawImage(c, 0, y, c.width, h, (Math.random() - 0.5) * 40 * near, y, c.width, h); g.fillStyle = `rgba(180,0,20,${near * 0.25})`; g.fillRect(0, y, c.width, h); }
-      }
-      if (countdown) { g.fillStyle = "rgba(0,0,0,.5)"; g.fillRect(0, 0, c.width, c.height); g.fillStyle = "#e33"; g.font = `${90 * dpr}px Creepster`; g.textAlign = "center"; g.fillText(String(Math.ceil((startedAt - Date.now()) / 1000)), c.width / 2, c.height / 2); g.font = `${22 * dpr}px 'Special Elite'`; g.fillStyle = "#eee"; g.fillText(amGhost ? "KAMU HANTU ASAP. Tangkap semua pemburu!" : "KAMU PEMBURU. Cari 5 kunci dan kabur!", c.width / 2, c.height / 2 + 50 * dpr); g.textAlign = "left"; }
-      void timeLeft;
-    };
     raf = requestAnimationFrame(loop);
     return () => {
-      cancelAnimationFrame(raf); clearTimeout(toastTimer);
+      cancelAnimationFrame(raf); clearTimeout(toastTimer); sc.dispose();
+      window.removeEventListener("resize", onResize); document.removeEventListener("mousemove", onMouse); cv.removeEventListener("click", onClick);
+      cv.removeEventListener("pointerdown", onPD); window.removeEventListener("pointermove", onPM); window.removeEventListener("pointerup", onPU);
+      if (document.pointerLockElement) void document.exitPointerLock();
       window.removeEventListener("keydown", kd); window.removeEventListener("keyup", ku);
       void supabase.removeChannel(ch); audio.stopAll();
     };
@@ -260,7 +187,7 @@ export function Game({ code, me, players, startedAt, isHost, onBackToLobby, onLe
 
   return (
     <div className="fixed inset-0 select-none overflow-hidden bg-void">
-      <canvas ref={canvasRef} className="h-full w-full" style={{ filter: spectating ? "grayscale(1) contrast(1.1)" : undefined }} />
+      <canvas ref={canvasRef} className="h-full w-full touch-none" style={{ filter: spectating ? "grayscale(1) contrast(1.1)" : undefined }} />
       <div className="pointer-events-none absolute inset-0" style={{ background: `radial-gradient(ellipse at center, transparent 45%, rgba(0,0,0,${0.75 + hud.near * 0.2}) 100%)`, boxShadow: hud.near > 0.3 ? `inset 0 0 ${80 * hud.near}px rgba(170,0,20,.6)` : undefined }} />
       {/* HUD */}
       <div className="absolute inset-x-0 top-0 flex items-start gap-2 p-2">
@@ -284,16 +211,20 @@ export function Game({ code, me, players, startedAt, isHost, onBackToLobby, onLe
         <MuteButton className="pointer-events-auto" />
       </div>
       <div className="absolute left-1/2 top-12 -translate-x-1/2 text-xs text-muted-foreground">{amGhost ? "HANTU ASAP" : "PEMBURU"} - {hud.room}</div>
+      <div className="pointer-events-none absolute left-1/2 top-1/2 size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-foreground/50" />
+      {hud.near > 0.2 && <div className="pointer-events-none absolute inset-0 animate-pulse" style={{ background: `repeating-linear-gradient(0deg, rgba(255,255,255,${hud.near * 0.05}) 0 1px, transparent 1px 3px)`, mixBlendMode: "screen" }} />}
+      {hud.cd > 0 && <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center bg-void/50 text-center"><div className="font-horror text-8xl text-primary">{hud.cd}</div><p className="mt-3 px-6 text-foreground">{amGhost ? "KAMU HANTU ASAP. Tangkap semua pemburu!" : "KAMU PEMBURU. Cari 5 kunci dan kabur!"}</p></div>}
       {toast && <div className="absolute left-1/2 top-20 -translate-x-1/2 rounded-lg border border-gold bg-card/90 px-4 py-2 text-center text-sm font-bold text-gold">{toast}</div>}
       {spectating && !outcome && <div className="absolute inset-x-0 top-28 text-center font-horror text-2xl text-foreground">KAMU JADI PENONTON</div>}
       {/* controls */}
       {isTouch && <div className="absolute bottom-6 left-6"><Joystick vec={joy} /></div>}
+      {isTouch && <div className="pointer-events-none absolute bottom-32 right-4 text-xs text-muted-foreground">Geser layar untuk melihat</div>}
       {!amGhost && !spectating && (
         <button onPointerDown={() => shoutRef.current()} className="absolute bottom-8 right-6 flex size-20 flex-col items-center justify-center rounded-full border-2 border-primary bg-blood/80 text-xs font-bold text-primary-foreground glow-blood">
           <Megaphone className="size-6" />TOLONG!
         </button>
       )}
-      {!isTouch && <div className="absolute bottom-3 left-3 text-xs text-muted-foreground">WASD / Panah untuk jalan{!amGhost && ", Spasi untuk teriak"}</div>}
+      {!isTouch && <div className="absolute bottom-3 left-3 text-xs text-muted-foreground">Klik layar lalu gerakkan mouse untuk melihat. WASD / Panah untuk jalan{!amGhost && ", Spasi untuk teriak"}</div>}
       {outcome && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-5 bg-void/90 p-6 text-center">
           <h1 className={`font-horror text-drip text-5xl ${won ? "text-gold" : "text-primary"}`}>
